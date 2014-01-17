@@ -10,6 +10,11 @@ Pre-requisites
 * iptables (on servers)
 * sudo access to servers to edit iptable rules
 
+Usage
+-----
+
+Try `blackhole --help`
+
 TODO
 ----
 
