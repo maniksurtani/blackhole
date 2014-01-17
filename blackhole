@@ -1,0 +1,203 @@
+#!/usr/bin/env ruby
+
+$banner = <<END
+Blackhole: sucks in network packets and makes them disappear.  A tool for simulating network partitions via iptables rules.
+
+Author: Manik Surtani http://github.com/maniksurtani/blackhole    
+
+Usage:
+    blackhole [--two-way] drop host1 host2
+    blackhole list hosts
+    blackhole reset hosts
+    blackhole split left="host1 host2 .. hostN" right="host3 host4 .. hostM"
+
+Actions:
+    drop: drops all packets from host1 to host2.  If --two-way is specified, host2 to host1 is also dropped.
+    list: lists all blackhole related iptables rules on a given set of host.
+    reset: removes all blackhole related iptables rules on a given set of hosts.
+    split: simulates a network split where hosts on the left can see each other, but nothing on the right, and vice versa.
+
+Options:
+END
+
+$global_opts = {
+  :two_way => false
+}
+
+require 'optparse'
+require 'io/console'
+require 'net/ssh'
+require 'etc'
+
+OptionParser.new do |opts|
+  opts.banner = $banner
+  opts.on("-2", "--two-way", "Generate reciprocal rule.") do
+    $global_opts[:two_way] = true
+  end
+  opts.on_tail("-h", "--help", "Show this message") do
+    puts opts
+    exit
+  end
+end.parse!
+
+def drop
+  host1 = ARGV.shift or abort "Insufficient args for drop.\nUse --help for usage"
+  host2 = ARGV.shift or abort "Insufficient args for drop.\nUse --help for usage"
+  enable_blackhole(host1, host2, $global_opts[:two_way])
+end
+
+def enable_blackhole(host1, host2, two_way)
+  print "Dropping packets from #{host1} to #{host2} "
+  print "and back" if two_way
+  print "\n"
+  if two_way then
+    h1_command = "sudo /sbin/iptables -N BLACK_HOLE ; sudo /sbin/iptables -A BLACK_HOLE -s #{host1} -d #{host2} -j DROP"
+    h2_command = "sudo /sbin/iptables -N BLACK_HOLE ; sudo /sbin/iptables -A BLACK_HOLE -s #{host2} -d #{host1} -j DROP"
+  else
+    h1_command = "sudo /sbin/iptables -N BLACK_HOLE ; sudo /sbin/iptables -A BLACK_HOLE -s #{host1} -d #{host2} -j DROP ; sudo /sbin/iptables -A BLACK_HOLE -s #{host2} -d #{host1} -j DROP"
+    h2_command = h1_command
+  end
+  on_host host1 do |ssh|
+    print ssh_exec_simple!(ssh, h1_command, true)
+  end
+  on_host host2 do |ssh|
+    print ssh_exec_simple!(ssh, h2_command, true)
+  end
+end
+
+def list
+  hosts = ARGV
+  command = "sudo /sbin/iptables -L BLACK_HOLE ; true"
+  print "Listing rules on hosts #{hosts} \n"
+  hosts.each do |h|
+    print indent("On host #{h}: \n", 1)
+    on_host h do |ssh|        
+      print ssh_exec_simple!(ssh, command, true)
+    end
+  end
+end
+
+def reset
+  hosts = ARGV
+  command = "sudo /sbin/iptables -F BLACK_HOLE ; sudo /sbin/iptables -X BLACK_HOLE"
+  print "Resetting rules on hosts #{hosts} \n"
+  hosts.each do |h|
+    print indent("On host #{h}: \n", 1)
+    on_host h do |ssh|        
+      ssh_exec_simple!(ssh, command, false)      
+    end
+  end
+  puts "Done!\n"
+end
+
+def split
+  l_hosts_str = ARGV.shift or abort "Insufficient args for split.\nUse --help for usage"
+  r_hosts_str = ARGV.shift or abort "Insufficient args for split.\nUse --help for usage"
+  l_hosts_pcs = l_hosts_str.split("=")
+  r_hosts_pcs = r_hosts_str.split("=")
+  if l_hosts_pcs[0] == "left" then
+    l_hosts = l_hosts_pcs[1].sub(",", " ").split(" ")
+    r_hosts = r_hosts_pcs[1].sub(",", " ").split(" ")
+  else
+    r_hosts = l_hosts_pcs[1].sub(",", " ").split(" ")
+    l_hosts = r_hosts_pcs[1].sub(",", " ").split(" ")
+  end
+
+  print "Splitting.  Left = #{l_hosts} and Right = #{r_hosts} \n"
+
+  l_hosts.each do |l|
+    r_hosts.each do |r|
+      enable_blackhole(l, r, true)
+    end
+  end
+end
+
+def run
+  action = ARGV.shift or abort 'Use --help for usage'
+
+  case action
+    when 'drop' then drop
+    when 'list' then list
+    when 'reset' then reset
+    when 'split' then split
+    else abort "unknown action #{action.inspect}"
+  end
+end
+
+# Execute a command and return standard output.
+# Abort if we get a nonzero exit code back.
+def ssh_exec_simple!(ssh, command, print_no_chain)  
+  out, err, exit_code = ssh_exec!(ssh, command, print_no_chain)
+  abort err if exit_code != 0
+
+  # try converting the output to prettified JSON.
+  begin
+    parsed = JSON.parse(out)    
+    return JSON.pretty_generate(parsed)
+  rescue
+    # otherwise, just return the string as-is.
+    return out
+  end
+end
+
+def ssh_exec!(ssh, command, print_no_chain)
+  stdout = ''
+  stderr = ''
+  exit_code = nil  
+  ssh.open_channel do |channel|
+    channel.request_pty
+    channel.exec(command) do |ch, success|
+      unless success
+        abort "Failed to execute command: #{command}"
+      end
+
+      channel.on_data do |ch, data|
+        if data =~ /\[sudo\]/
+          print data
+          channel.send_data STDIN.noecho(&:gets)
+          channel.on_data do |ch, data|
+            ## sudo results
+            if data =~ /No chain\/target\/match/
+              # print indent("No BLACK_HOLE rules installed", 3) if print_no_chain
+            else
+              print data
+            end
+          end
+        else
+          stdout += data
+        end
+      end
+      channel.on_extended_data do |ch, type, data|
+        stderr += data
+      end
+      channel.on_request('exit-status') do |ch, data|
+        exit_code = data.read_long
+      end
+    end
+  end
+
+  ssh.loop
+  [stdout, stderr, exit_code]
+end
+
+def indent(text, level)
+  lines = text.split("\n")
+  lines = lines.map do |line|
+    '  ' * level + line
+  end
+  lines.join("\n")
+end
+
+def on_host(host)
+  begin
+    Net::SSH.start(host, Etc.getlogin) do |ssh|
+      @result = yield ssh
+    end
+    @result
+  rescue => e    
+    puts indent("Cannot run on #{host}", 3)
+    print e
+  end
+end
+
+run()
