@@ -18,6 +18,8 @@ Try `blackhole --help`
 TODO
 ----
 
+* IPv6 (`ip6tables`)
+* Do hostname lookups before creating rules
 * Ability to specify specific ports and protocols to block
 * Create 3-way splits
 

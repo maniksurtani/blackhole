@@ -6,13 +6,13 @@ Blackhole: sucks in network packets and makes them disappear.  A tool for simula
 Author: Manik Surtani http://github.com/maniksurtani/blackhole    
 
 Usage:
-    blackhole [--two-way] drop host1 host2
+    blackhole [--two-way] [--mode REJECT|DROP|TCP_RESET] drop host1 host2
     blackhole list hosts
     blackhole reset hosts
     blackhole split left="host1 host2 .. hostN" right="host3 host4 .. hostM"
 
 Actions:
-    drop: drops all packets from host1 to host2.  If --two-way is specified, host2 to host1 is also dropped.
+    drop: drops all packets from host1 to host2.  If --two-way is specified, host2 to host1 is also dropped.  mode defaults to REJECT
     list: lists all blackhole related iptables rules on a given set of host.
     reset: removes all blackhole related iptables rules on a given set of hosts.
     split: simulates a network split where hosts on the left can see each other, but nothing on the right, and vice versa.
@@ -21,7 +21,8 @@ Options:
 END
 
 $global_opts = {
-  :two_way => false
+  :two_way => false,
+  :mode => "REJECT"
 }
 
 require 'optparse'
@@ -33,6 +34,15 @@ OptionParser.new do |opts|
   opts.banner = $banner
   opts.on("-2", "--two-way", "Generate reciprocal rule.") do
     $global_opts[:two_way] = true
+  end
+  opts.on("-m [ARG]", "--mode [ARG]", "Packet loss mode.") do |mode|
+    if mode.upcase =~ /^((REJECT)|(DROP)|(TCP_RESET))$/ then
+      $global_opts[:mode] = mode.upcase
+    else
+      puts "Invalid mode #{mode}\n"
+      puts opts
+      exit
+    end
   end
   opts.on_tail("-h", "--help", "Show this message") do
     puts opts
@@ -47,14 +57,14 @@ def drop
 end
 
 def enable_blackhole(host1, host2, two_way)
-  print "Dropping packets from #{host1} to #{host2} "
+  print "Dropping packets (#{$global_opts[:mode]}) from #{host1} to #{host2} "
   print "and back" if two_way
   print "\n"
   if two_way then
-    h1_command = "sudo /sbin/iptables -N BLACK_HOLE ; sudo /sbin/iptables -A BLACK_HOLE -s #{host1} -d #{host2} -j DROP"
-    h2_command = "sudo /sbin/iptables -N BLACK_HOLE ; sudo /sbin/iptables -A BLACK_HOLE -s #{host2} -d #{host1} -j DROP"
+    h1_command = "sudo /sbin/iptables -N BLACK_HOLE ; sudo /sbin/iptables -A BLACK_HOLE -s #{host1} -d #{host2} -j #{$global_opts[:mode]}"
+    h2_command = "sudo /sbin/iptables -N BLACK_HOLE ; sudo /sbin/iptables -A BLACK_HOLE -s #{host2} -d #{host1} -j #{$global_opts[:mode]}"
   else
-    h1_command = "sudo /sbin/iptables -N BLACK_HOLE ; sudo /sbin/iptables -A BLACK_HOLE -s #{host1} -d #{host2} -j DROP ; sudo /sbin/iptables -A BLACK_HOLE -s #{host2} -d #{host1} -j DROP"
+    h1_command = "sudo /sbin/iptables -N BLACK_HOLE ; sudo /sbin/iptables -A BLACK_HOLE -s #{host1} -d #{host2} -j #{$global_opts[:mode]} ; sudo /sbin/iptables -A BLACK_HOLE -s #{host2} -d #{host1} -j #{$global_opts[:mode]}"
     h2_command = h1_command
   end
   on_host host1 do |ssh|
