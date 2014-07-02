@@ -3,7 +3,8 @@
 $banner = <<END
 Blackhole: sucks in network packets and makes them disappear.  A tool for simulating network partitions via iptables rules.
 
-Author: Manik Surtani http://github.com/maniksurtani/blackhole    
+Author: Manik Surtani
+Sources: http://github.com/square-tools/blackhole
 
 Usage:
     blackhole [--two-way] [--mode REJECT|DROP|TCP_RESET] drop host1 host2
