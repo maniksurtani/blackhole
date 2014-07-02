@@ -25,7 +25,7 @@ TODO
 Feel like contributing?
 -----------------------
 
-Great! Just fork the project on GitHub and issue a pull request with your changes.
+Fork the project on GitHub and issue a pull request with your changes.
 
 License
 -------
